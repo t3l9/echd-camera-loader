@@ -35,7 +35,7 @@
 - Python 3.11 или выше
 - Google Chrome
 - Учётная запись
-- Доступ к Google Sheets (опционально)
+- Доступ к Google Sheets
 
 ## Установка
 

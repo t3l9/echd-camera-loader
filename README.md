@@ -194,12 +194,6 @@ Downloads/
 - `Адрес` — адрес установки (для переименования файлов)
 - `Положение` — положение камеры (опционально)
 
-В GUI укажите:
-- Script Location: `main.py`
-- Output Directory: `dist`
-- Output Format: One File
-- Console Window: Window Based
-
 ## Известные ограничения
 
 - Требуется стабильное интернет-соединение

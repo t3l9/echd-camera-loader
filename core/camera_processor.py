@@ -10,11 +10,9 @@ from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from config import url, downloads_folder
@@ -88,8 +86,8 @@ class CameraProcessor:
             chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
             chrome_options.add_experimental_option("useAutomationExtension", False)
 
-            self.driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()),
-                                           options=chrome_options)
+            # Selenium 4.6+ сам скачивает нужный драйвер
+            self.driver = webdriver.Chrome(options=chrome_options)
             self.driver.maximize_window()
 
             # Устанавливаем параметры для автоматического разрешения через CDP
@@ -335,12 +333,10 @@ class CameraProcessor:
                 # Перезапускаем драйвер с новыми опциями
                 if self.driver:
                     old_driver = self.driver
-                    service = ChromeService(ChromeDriverManager().install())
-                    self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                    self.driver = webdriver.Chrome(options=chrome_options)
                     old_driver.quit()
                 else:
-                    service = ChromeService(ChromeDriverManager().install())
-                    self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                    self.driver = webdriver.Chrome(options=chrome_options)
 
                 print("✅ Фейковая камера успешно настроена")
             else:
@@ -363,8 +359,7 @@ class CameraProcessor:
                     chrome_options.add_experimental_option('prefs', prefs)
 
                     self.chrome_options = chrome_options
-                    service = ChromeService(ChromeDriverManager().install())
-                    self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                    self.driver = webdriver.Chrome(options=chrome_options)
 
             # Загружаем страницу
             self.driver.get(url)

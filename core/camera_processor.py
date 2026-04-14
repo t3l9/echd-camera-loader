@@ -583,29 +583,24 @@ class CameraProcessor:
     def _fast_handle_place(self, place, camera_id, district, address):
         """Быстрая обработка положения с передачей дополнительных данных"""
         try:
-            # Пытаемся найти кнопку "Положение" разными способами
-            button_selectors = [
-                "/html/body/div[2]/div/div[7]/div/div/div[1]/div[2]/div[2]/div/button[4]",
-                "/html/body/div[2]/div/div[7]/div/div/div[1]/div[2]/div[2]/div/button[3]",
-                "/html/body/div[2]/div/div[6]/div/div/div[1]/div[2]/div[2]/div/button[4]",
-                "/html/body/div[2]/div/div[6]/div/div/div[1]/div[2]/div[2]/div/button[3]"
-            ]
+            time.sleep(1)
+            # 1. Первое нажатие
+            selector1 = "/html/body/div[2]/div/div[6]/div/div/div[1]/div[2]/div[2]/div/button[1]"
+            button1 = WebDriverWait(self.driver, 5).until(
+                EC.element_to_be_clickable((By.XPATH, selector1))
+            )
+            button1.click()
+            logger.info(f"✅ Кнопка положения (шаг 1) нажата")
+            
+            time.sleep(0.5)  # Пауза для появления второго меню
 
-            button_found = False
-            for selector in button_selectors:
-                try:
-                    button = WebDriverWait(self.driver, 2).until(
-                        EC.element_to_be_clickable((By.XPATH, selector))
-                    )
-                    button.click()
-                    button_found = True
-                    logger.info(f"✅ Кнопка 'Положение' найдена по селектору: {selector}")
-                    break
-                except:
-                    continue
-
-            if not button_found:
-                raise Exception("Не удалось найти кнопку 'Положение'")
+            # 2. Второе нажатие
+            selector2 = "/html/body/div[2]/div/div[6]/div/div/div[1]/div[3]/div/div[2]/div[1]/div[1]/button[1]"
+            button2 = WebDriverWait(self.driver, 5).until(
+                EC.element_to_be_clickable((By.XPATH, selector2))
+            )
+            button2.click()
+            logger.info(f"✅ Кнопка положения (шаг 2) нажата")
 
             time.sleep(0.7)
             return self._fast_find_place_element(place, camera_id, district, address)

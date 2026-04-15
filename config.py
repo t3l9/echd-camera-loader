@@ -1,16 +1,49 @@
 """
 Конфигурация приложения ECHD Camera Loader
 """
+import sys
 import os
 import logging
 from dotenv import load_dotenv
 
+# Определяем путь к директории приложения (для работы из exe и из исходников)
+if getattr(sys, 'frozen', False):
+    # Запущено из PyInstaller exe
+    application_path = os.path.dirname(sys.executable)
+else:
+    # Запущено из исходников Python
+    application_path = os.path.dirname(os.path.abspath(__file__))
+
 # Загрузка переменных окружения из .env файла
-load_dotenv()
+# Ищем .env в нескольких местах (по порядку):
+# 1. Рядом с exe файлом (для packaged версии)
+# 2. В текущей рабочей директории (для запуска из любой папки)
+# 3. Рядом с config.py (для разработки)
+env_paths_to_try = [
+    os.path.join(application_path, '.env'),  # рядом с exe
+    os.path.join(os.getcwd(), '.env'),        # в текущей директории
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'),  # рядом с config.py
+]
+
+env_loaded = False
+for env_path in env_paths_to_try:
+    if os.path.exists(env_path):
+        load_dotenv(env_path, override=True)
+        env_loaded = True
+        break
+
+if not env_loaded:
+    # Тихое предупреждение в лог (не блокирующее)
+    import warnings
+    warnings.warn(
+        f"Файл .env не найден в ожидаемых путях:\n" +
+        "\n".join(f"  - {p}" for p in env_paths_to_try) +
+        "\nПриложение будет использовать значения по умолчанию."
+    )
 
 
 # ===== ВЕРСИЯ ПРИЛОЖЕНИЯ =====
-APP_VERSION = os.getenv('APP_VERSION', '9.3.0')
+APP_VERSION = os.getenv('APP_VERSION', '9.4.2')
 
 
 # ===== РАЙОНЫ =====

@@ -497,17 +497,19 @@ class CameraProcessor:
                     )
                 )
 
-                # === ИСПРАВЛЕНИЕ: ОЧИСТКА ПОЛЯ ТРЕМЯ СПОСОБАМИ ===
-                # Способ 1: Обычная очистка
+                # close_element = WebDriverWait(self.driver, 15).until(
+                #     EC.element_to_be_clickable((By.XPATH,
+                #                                 "/html/body/div[2]/div/div[7]/div[24]/div[3]/div[1]/div[2]/div[1]/div[3]/div/div/div/button"))
+                # )
+                # close_element.click()
+
+
                 search_input.clear()
 
-                # Способ 2: Выделить все и удалить
                 search_input.send_keys(Keys.CONTROL + 'a')
                 search_input.send_keys(Keys.DELETE)
 
-                # Способ 3: Дополнительно очищаем стрелками
-                for _ in range(10):
-                    search_input.send_keys(Keys.BACKSPACE)
+                time.sleep(0.1)
 
                 # Теперь вводим новый ID
                 search_input.send_keys(camera_id)

@@ -3,14 +3,16 @@
 Работа с Selenium, создание снимков, обработка положений
 """
 import os
+import re
 import time
+import shutil
 import logging
+import subprocess
 from datetime import datetime
 
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from PyQt6.QtWidgets import QApplication
@@ -19,6 +21,54 @@ from config import url, downloads_folder
 from core.file_utils import is_file_downloaded, move_and_rename_last_downloaded_file
 
 logger = logging.getLogger(__name__)
+
+
+def get_chrome_major_version():
+    """Определяет major-версию установленного Chrome.
+
+    Возвращает int (например 148) или None, если версию определить не удалось.
+    При None undetected_chromedriver сам подбирает подходящий драйвер (авто-детект).
+    """
+    # Windows — надёжнее всего через реестр (BLBeacon), т.к. chrome.exe --version
+    # в консоль версию не выводит.
+    if os.name == "nt":
+        try:
+            import winreg
+            for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                try:
+                    with winreg.OpenKey(hive, r"Software\Google\Chrome\BLBeacon") as key:
+                        version, _ = winreg.QueryValueEx(key, "version")
+                        return int(version.split(".")[0])
+                except FileNotFoundError:
+                    continue
+        except Exception:
+            pass
+
+    # Linux / macOS / запасной вариант — через бинарник
+    candidates = [
+        "google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ]
+    for name in candidates:
+        path = shutil.which(name) or (name if os.path.exists(name) else None)
+        if not path:
+            continue
+        try:
+            out = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
+            match = re.search(r"(\d+)\.", out.decode(errors="ignore"))
+            if match:
+                return int(match.group(1))
+        except Exception:
+            continue
+
+    return None
+
+
+# Версия Chrome определяется один раз при импорте модуля.
+# Если None — undetected_chromedriver перейдёт на авто-детект.
+CHROME_MAJOR_VERSION = get_chrome_major_version()
+logger.info(f"Определённая major-версия Chrome: {CHROME_MAJOR_VERSION}")
 
 
 # Forward reference для избежания циклического импорта
@@ -43,35 +93,45 @@ class CameraProcessor:
         self.cancel_check_callback = None
         self._is_cancelled = False
         self._is_authenticated = False
-        self.chrome_options = None
+
+    def _build_chrome_options(self):
+        """Единая точка сборки опций Chrome.
+
+        Используется при инициализации драйвера, чтобы не дублировать
+        аргументы и prefs в нескольких местах.
+        """
+        chrome_options = uc.ChromeOptions()
+
+        chrome_options.add_argument("--force-device-scale-factor=0.8")
+        chrome_options.add_argument("--high-dpi-support=0.8")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-popup-blocking")
+        chrome_options.add_argument("--use-fake-ui-for-media-stream")
+        chrome_options.add_argument("--disable-features=WebRtcHideLocalIpsWithMdns")
+        chrome_options.add_argument("--autoplay-policy=no-user-gesture-required")
+
+        prefs = {
+            "profile.default_content_setting_values.media_stream_mic": 1,
+            "profile.default_content_setting_values.media_stream_camera": 1,
+            "profile.default_content_setting_values.notifications": 2,
+            "download.default_directory": downloads_folder,
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "safebrowsing.enabled": True,
+            "credentials_enable_service": False,
+            "profile.password_manager_enabled": False,
+        }
+        chrome_options.add_experimental_option("prefs", prefs)
+
+        return chrome_options
 
     def _initialize_driver(self):
         """Инициализация драйвера Chrome с автоматическим разрешением медиа-доступа"""
         try:
-            chrome_options = uc.ChromeOptions()
+            chrome_options = self._build_chrome_options()
 
-            chrome_options.add_argument("--force-device-scale-factor=0.8")
-            chrome_options.add_argument("--high-dpi-support=0.8")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--use-fake-ui-for-media-stream")
-            chrome_options.add_argument("--disable-features=WebRtcHideLocalIpsWithMdns")
-            chrome_options.add_argument("--autoplay-policy=no-user-gesture-required")
-
-            prefs = {
-                "profile.default_content_setting_values.media_stream_mic": 1,
-                "profile.default_content_setting_values.media_stream_camera": 1,
-                "profile.default_content_setting_values.notifications": 2,
-                "download.default_directory": downloads_folder,
-                "download.prompt_for_download": False,
-                "download.directory_upgrade": True,
-                "safebrowsing.enabled": True,
-                "credentials_enable_service": False,
-                "profile.password_manager_enabled": False
-            }
-            chrome_options.add_experimental_option("prefs", prefs)
-
-            self.driver = uc.Chrome(options=chrome_options, version_main=148)
+            self.driver = uc.Chrome(options=chrome_options, version_main=CHROME_MAJOR_VERSION)
             self.driver.maximize_window()
 
             # Скрываем все следы автоматизации на уровне JS до загрузки страницы
@@ -277,7 +337,7 @@ class CameraProcessor:
                                                 "//*[@id='widget-sidebar-outer-visibility-manager']/div[2]/div[1]/div[1]/div/div[2]/div[1]/div"))
                 )
                 list_header.click()
-            except:
+            except Exception:
                 pass
 
             return False
@@ -285,76 +345,11 @@ class CameraProcessor:
     def _login_to_site(self):
         """Авторизация на сайте с настройкой разрешений"""
         try:
-            # === НАСТРОЙКА ФЕЙКОВОЙ КАМЕРЫ ===
-            # Путь к видео для фейковой камеры
-            fake_video_path = r"1.mp4"  # Укажите свой путь к видео
-
-            # Сохраняем старые опции, если нужно пересоздать драйвер
-            need_restart = False
-
-            # Проверяем существование видеофайла
-            if os.path.exists(fake_video_path):
-                print(f"📹 Настроена фейковая камера с видео: {fake_video_path}")
-
-                # Вместо получения driver.options, создаем новые опции
-                chrome_options = Options()
-
-                # Копируем существующие аргументы, если они есть
-                if hasattr(self, 'chrome_options') and self.chrome_options:
-                    # Если у нас сохранены опции, используем их
-                    chrome_options = self.chrome_options
-                else:
-                    # Или создаем новые с базовыми настройками
-                    chrome_options = uc.ChromeOptions()
-                    chrome_options.add_argument('--disable-gpu')
-                    chrome_options.add_argument('--no-sandbox')
-                    chrome_options.add_argument('--disable-dev-shm-usage')
-                    chrome_options.add_argument('--disable-popup-blocking')
-
-                    # Опции для автоматического разрешения медиа
-                    prefs = {
-                        'profile.default_content_setting_values.media_stream_camera': 1,
-                        'profile.default_content_setting_values.media_stream_mic': 1,
-                        'profile.default_content_setting_values.notifications': 1
-                    }
-                    chrome_options.add_experimental_option('prefs', prefs)
-
-                # Добавляем аргументы для фейковой камеры
-                chrome_options.add_argument("--use-fake-device-for-media-stream")
-                chrome_options.add_argument("--use-fake-ui-for-media-stream")
-                chrome_options.add_argument(f"--use-file-for-fake-video-capture={fake_video_path}")
-
-                # Сохраняем опции для будущего использования
-                self.chrome_options = chrome_options
-
-                # Перезапускаем драйвер с новыми опциями
-                if self.driver:
-                    old_driver = self.driver
-                    self.driver = uc.Chrome(options=chrome_options, version_main=148)
-                    old_driver.quit()
-                else:
-                    self.driver = uc.Chrome(options=chrome_options, version_main=148)
-
-                print("✅ Фейковая камера успешно настроена")
-            else:
-                print(f"⚠️ Видеофайл не найден: {fake_video_path}. Пропускаем настройку фейковой камеры")
-                # Если драйвер еще не создан, создаем его с базовыми настройками
-                if not self.driver:
-                    chrome_options = uc.ChromeOptions()
-                    chrome_options.add_argument('--disable-gpu')
-                    chrome_options.add_argument('--no-sandbox')
-                    chrome_options.add_argument('--disable-dev-shm-usage')
-                    chrome_options.add_argument('--disable-popup-blocking')
-
-                    prefs = {
-                        'profile.default_content_setting_values.media_stream_camera': 1,
-                        'profile.default_content_setting_values.media_stream_mic': 1,
-                        'profile.default_content_setting_values.notifications': 1
-                    }
-                    chrome_options.add_experimental_option('prefs', prefs)
-
-                    self.chrome_options = chrome_options
-                    self.driver = uc.Chrome(options=chrome_options, version_main=148)
+            # Гарантируем, что драйвер создан единым способом
+            if not self.driver:
+                if not self._initialize_driver():
+                    logger.error("Не удалось инициализировать драйвер перед авторизацией")
+                    return False
 
             # Загружаем страницу
             self.driver.get(url)
@@ -466,7 +461,7 @@ class CameraProcessor:
                     )
                     element.click()
                     time.sleep(0.2)
-                except:
+                except Exception:
                     continue
 
             # === ДОПОЛНИТЕЛЬНО: ОЧИЩАЕМ ПОЛЕ ПОИСКА ===
@@ -480,7 +475,7 @@ class CameraProcessor:
                 search_input.clear()
                 # Отправляем Escape для снятия фокуса
                 search_input.send_keys(Keys.ESCAPE)
-            except:
+            except Exception:
                 pass
 
         except Exception as e:
@@ -496,13 +491,6 @@ class CameraProcessor:
                          "//input[@data-training-identifier='[WidgetsEchd2]sidebar-cameras-search-panel__search_input']")
                     )
                 )
-
-                # close_element = WebDriverWait(self.driver, 15).until(
-                #     EC.element_to_be_clickable((By.XPATH,
-                #                                 "/html/body/div[2]/div/div[7]/div[24]/div[3]/div[1]/div[2]/div[1]/div[3]/div/div/div/button"))
-                # )
-                # close_element.click()
-
 
                 search_input.clear()
 
@@ -541,7 +529,7 @@ class CameraProcessor:
                     return True
                 time.sleep(0.9)
             return False
-        except:
+        except Exception:
             return False
 
     def _fast_handle_place(self, place, camera_id, district, address):
@@ -554,8 +542,8 @@ class CameraProcessor:
                 EC.element_to_be_clickable((By.XPATH, selector1))
             )
             button1.click()
-            logger.info(f"✅ Кнопка положения (шаг 1) нажата")
-            
+            logger.info("✅ Кнопка положения (шаг 1) нажата")
+
             time.sleep(0.5)  # Пауза для появления второго меню
 
             # 2. Второе нажатие
@@ -564,7 +552,7 @@ class CameraProcessor:
                 EC.element_to_be_clickable((By.XPATH, selector2))
             )
             button2.click()
-            logger.info(f"✅ Кнопка положения (шаг 2) нажата")
+            logger.info("✅ Кнопка положения (шаг 2) нажата")
 
             time.sleep(0.7)
             return self._fast_find_place_element(place, camera_id, district, address)
@@ -642,13 +630,13 @@ class CameraProcessor:
             for i, (by, locator) in enumerate(loader_locators, 1):
                 try:
                     logger.info(f"  Проверяем локатор {i}: {locator[:50]}...")
-                    element = WebDriverWait(self.driver, loader_timeout).until(
+                    WebDriverWait(self.driver, loader_timeout).until(
                         EC.presence_of_element_located((by, locator))
                     )
                     loader_found = True
                     logger.info(f"  ✅ Лоадер найден по локатору {i} через {time.time() - start_time:.1f}с")
                     break
-                except Exception as e:
+                except Exception:
                     logger.info(f"  ⏱️ Локатор {i} не сработал за {loader_timeout}с")
                     continue
 
@@ -663,8 +651,8 @@ class CameraProcessor:
                         EC.invisibility_of_element_located((By.XPATH, "//div[@data-test-id='3z62wz']"))
                     )
                     logger.info(f"  ✅ Основной лоудер исчез через {time.time() - wait_start:.1f}с")
-                except:
-                    logger.warning(f"  ⚠️ Основной лоудер не исчез, но продолжаем")
+                except Exception:
+                    logger.warning("  ⚠️ Основной лоудер не исчез, но продолжаем")
 
                 # Дополнительная проверка на все лоудеры
                 try:
@@ -674,15 +662,15 @@ class CameraProcessor:
                                 len(driver.find_elements(By.XPATH, "//div[@data-test-id='1mhkoy']")) == 0
                         )
                     )
-                    logger.info(f"  ✅ Все лоудеры исчезли")
-                except:
-                    logger.warning(f"  ⚠️ Некоторые лоудеры все еще видны")
+                    logger.info("  ✅ Все лоудеры исчезли")
+                except Exception:
+                    logger.warning("  ⚠️ Некоторые лоудеры все еще видны")
             else:
                 logger.info(f"⚠️ Лоудер не найден для камеры {camera_id}")
 
                 # Для дворовых камер даем дополнительное время на стабилизацию
                 if is_entrance:
-                    logger.info(f"  🏠 Дворовая камера: даем доп. время на стабилизацию 2с")
+                    logger.info("  🏠 Дворовая камера: даем доп. время на стабилизацию 2с")
                     time.sleep(2)
                 else:
                     time.sleep(0.5)
@@ -700,7 +688,7 @@ class CameraProcessor:
                                                 "/html/body/div[2]/div/div[6]/div/div/div[1]/div[3]/div/div[3]/div/div/div[2]/div/button[3]"))
                 )
                 snapshot_button.click()
-                logger.info(f"  ✅ Кнопка снимка нажата")
+                logger.info("  ✅ Кнопка снимка нажата")
             except Exception as e:
                 logger.error(f"  ❌ Не удалось нажать кнопку снимка: {e}")
                 return False
@@ -711,7 +699,7 @@ class CameraProcessor:
                     EC.element_to_be_clickable((By.XPATH,
                                                 "/html/body/div[2]/div/div[6]/div[2]/div/div[4]/div/div/button[2]"))
                 )
-                logger.info(f"  ✅ Окно сохранения открылось")
+                logger.info("  ✅ Окно сохранения открылось")
             except Exception as e:
                 logger.error(f"  ❌ Окно сохранения не появилось: {e}")
                 return False
@@ -719,7 +707,7 @@ class CameraProcessor:
             # 3. Нажимаем "Сохранить"
             try:
                 save_button.click()
-                logger.info(f"  ✅ Кнопка 'Сохранить' нажата")
+                logger.info("  ✅ Кнопка 'Сохранить' нажата")
             except Exception as e:
                 logger.error(f"  ❌ Не удалось нажать 'Сохранить': {e}")
                 return False
@@ -734,27 +722,27 @@ class CameraProcessor:
                                                 "/html/body/div[2]/div/div[6]/div[2]/div/div[1]/div[2]/button[2]"))
                 )
                 logger.info(f"  ✅ Кнопка закрытия найдена через {time.time() - close_start:.1f}с")
-            except:
-                logger.info(f"  ⚠️ Кнопка закрытия не найдена за 1с, пробуем Escape")
+            except Exception:
+                logger.info("  ⚠️ Кнопка закрытия не найдена за 1с, пробуем Escape")
 
             # 5. Закрываем окно просмотра
             if close_button:
                 try:
                     close_button.click()
-                    logger.info(f"  ✅ Окно просмотра закрыто")
+                    logger.info("  ✅ Окно просмотра закрыто")
                 except Exception as e:
                     logger.error(f"  ❌ Не удалось закрыть окно кнопкой: {e}")
                     # Пробуем Escape как запасной вариант
                     try:
                         self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
-                        logger.info(f"  ✅ Окно закрыто через Escape")
-                    except:
+                        logger.info("  ✅ Окно закрыто через Escape")
+                    except Exception:
                         pass
             else:
                 # Если кнопки нет - пробуем Escape
                 try:
                     self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
-                    logger.info(f"  ✅ Окно закрыто через Escape")
+                    logger.info("  ✅ Окно закрыто через Escape")
                 except Exception as e:
                     logger.error(f"  ❌ Не удалось закрыть окно: {e}")
 
@@ -764,8 +752,8 @@ class CameraProcessor:
                     EC.element_to_be_clickable((By.XPATH,
                                                 "/html/body/div[2]/div/div[6]/div/div/div[1]/div[3]/div/div[3]/div/div/div[2]/div/button[3]"))
                 )
-                logger.info(f"  ✅ Вернулись к основному интерфейсу")
-            except:
+                logger.info("  ✅ Вернулись к основному интерфейсу")
+            except Exception:
                 # Не критично, если не нашли - возможно, интерфейс уже готов
                 pass
 
@@ -783,7 +771,7 @@ class CameraProcessor:
                 # Пробуем закрыть возможные модальные окна
                 self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
                 time.sleep(0.5)
-            except:
+            except Exception:
                 pass
 
             return False
@@ -821,7 +809,7 @@ class CameraProcessor:
                     logger.info(f"  ✅ Файл успешно перемещен и переименован в '{new_filename}'")
                     return True
                 else:
-                    logger.warning(f"  ⚠️ Файл найден, но не удалось переместить")
+                    logger.warning("  ⚠️ Файл найден, но не удалось переместить")
                     return False
 
             time.sleep(wait_time)
@@ -836,7 +824,7 @@ class CameraProcessor:
             recent_files.sort(key=lambda x: os.path.getctime(os.path.join(downloads_folder, x)), reverse=True)
 
             if recent_files:
-                logger.info(f"  📂 Последние файлы в папке загрузок:")
+                logger.info("  📂 Последние файлы в папке загрузок:")
                 for i, f in enumerate(recent_files[:3]):
                     file_path = os.path.join(downloads_folder, f)
                     size = os.path.getsize(file_path)
@@ -948,3 +936,15 @@ class CameraProcessor:
         except Exception as e:
             logger.warning(f"Ошибка при обработке камеры {camera_id}: {e}")
             return False
+
+    def close(self):
+        """Корректное закрытие драйвера и освобождение ресурсов"""
+        if self.driver:
+            try:
+                self.driver.quit()
+                logger.info("Драйвер Chrome закрыт")
+            except Exception as e:
+                logger.warning(f"Ошибка при закрытии драйвера: {e}")
+            finally:
+                self.driver = None
+                self._is_authenticated = False
